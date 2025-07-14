@@ -11,9 +11,13 @@ use panic_probe as _;
 use stm32f4xx_hal::gpio::{self, Speed};
 use stm32f4xx_hal::hal::digital::OutputPin;
 use stm32f4xx_hal::hal::spi::{self, Phase, Polarity};
+use stm32f4xx_hal::pac::dma1::st;
 use stm32f4xx_hal::spi::{Instance, Spi};
 use stm32f4xx_hal::{self, rcc::RccExt};
 use stm32f4xx_hal::prelude::*;
+use st7789v2::ST7789V2;
+
+use crate::st7789v2::Commands;
 
 
 mod st7789v2;
@@ -50,8 +54,8 @@ fn main() -> ! {
 
     println!("sysclk:{}\nhclk:{}\n", sfreq, hfreq);
 
-    
-    let buffer = [0u8; 512];
+    const W : usize = 240; // Width of the display
+    const H : usize = 280; // Height of the display
 
     let pa = dp.GPIOA.split();
 
@@ -61,11 +65,37 @@ fn main() -> ! {
     
     let mode = spi::Mode {polarity: Polarity::IdleHigh, phase: Phase::CaptureOnSecondTransition};
     let spi = Spi::new(dp.SPI1, (pa5_sck, false_pin, pa7_mosi), mode, 16.MHz(), &clocks);
-
-    let buffer = [0u8; 512];
     let dc = pa.pa4.into_push_pull_output().speed(Speed::High);     // high for data and low for command
     let cs = pa.pa3.into_push_pull_output().speed(Speed::High);
     let rst = pa.pa2.into_push_pull_output().speed(Speed::High);
+
+    let mut d = Delay::new(syst, clocks.hclk().raw());
+    let mut st7789v2: ST7789V2<
+        _, // SPI type
+        _, // DC pin type
+        _, // RST pin type
+        _, // CS pin type
+        W, // width
+        H  // height
+    > = ST7789V2::new(spi, dc, rst, cs, &mut d);
+
+    let buffer = [0x00u8; W * H * 2]; // Buffer for the display, initialized to white (RGB565 format)
+
+    st7789v2.init().expect("Failed to initialize ST7789V2 display");
+    // manually drawing using send_data and send_command methods for testing from the buffer
+
+
+    st7789v2.send_command(Commands::CASET).unwrap();
+    st7789v2.send_data(&[0x00, 0x00, 0x00, (W - 1) as u8]).unwrap(); // column start/end
+
+    st7789v2.send_command(Commands::RASET).unwrap();
+    st7789v2.send_data(&[0x00, 0x00, ((H - 1) >> 8) as u8, ((H - 1) & 0xFF) as u8]).unwrap(); // row start/end
+
+    st7789v2.send_command(Commands::RAMWR).unwrap();
+    st7789v2.send_data(&buffer).unwrap(); // SEND WHOLE BUFFER AT ONCE!
+
+
+    println!("Data sent successfully");
 
 
 
