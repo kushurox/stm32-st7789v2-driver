@@ -1,36 +1,40 @@
 use cortex_m::delay::Delay;
-use defmt::{debug, info, println};
-use stm32f4xx_hal::{hal::{digital::{self, ErrorType, OutputPin}, spi::{self, SpiBus}}, spi::{Instance, Spi}};
+use defmt::info;
+use stm32f4xx_hal::{
+    hal::{
+        digital::OutputPin,
+    },
+    spi::{Instance, Spi},
+};
 
 /// ST7789V2 driver for the ST7789V2 display.
 /// This driver uses SPI for communication and requires a data/command pin, a reset pin,
 /// and a chip select pin.
 /// TODO: Implement DMA support for faster data transfer.
-pub struct ST7789V2<'a, SPI, DC, RST, CS, const W: usize, const H: usize, const CMode: u8 = 0x55>
-where 
+pub struct ST7789V2<'a, SPI, DC, RST, CS, const W: usize, const H: usize, const C_MODE: u8 = 0x55>
+where
     SPI: Instance,
     DC: OutputPin,
     RST: OutputPin,
-    CS: OutputPin
+    CS: OutputPin,
 {
     spi: Spi<SPI>,
     dc: DC,
     rst: RST,
     cs: CS,
-    delay: &'a mut Delay
+    delay: &'a mut Delay,
 }
 
 /// Error type for the ST7789V2 driver.
 /// It is a generic error type that can be used to handle errors from the SPI, CS and DC pins.
 #[allow(dead_code)]
 #[derive(Debug)]
-pub enum Error<SpiE, CSE, DCE, RSE>{
+pub enum Error<SpiE, CSE, DCE, RSE> {
     Spi(SpiE),
     CS(CSE),
     DC(DCE),
     RST(RSE),
 }
-
 
 /// Color mode for the ST7789V2 display.
 /// This enum defines the color mode used by the display.
@@ -61,16 +65,14 @@ pub enum Commands {
     InversionOff = 0x20,
 }
 
-
-impl<'a, SPI, DC, RST, CS, const W: usize, const H: usize, const CMode: u8> ST7789V2<'a, SPI, DC, RST, CS, W, H, CMode>
+impl<'a, SPI, DC, RST, CS, const W: usize, const H: usize, const C_MODE: u8>
+    ST7789V2<'a, SPI, DC, RST, CS, W, H, C_MODE>
 where
     SPI: Instance,
     DC: OutputPin,
     RST: OutputPin,
-    CS: OutputPin
+    CS: OutputPin,
 {
-
-    pub const BUFFER_SIZE: usize = W * H * 2; // 2 bytes per pixel for RGB565
 
     /// Creates a new instance of the ST7789V2 driver.
     /// # Arguments
@@ -83,7 +85,13 @@ where
     /// A new instance of the ST7789V2 driver.
     pub const fn new(spi: Spi<SPI>, dc: DC, rst: RST, cs: CS, delay: &'a mut Delay) -> Self {
         // initialzing the controller
-        Self { spi, dc, rst, cs, delay}
+        Self {
+            spi,
+            dc,
+            rst,
+            cs,
+            delay,
+        }
     }
 
     /// Initializes the ST7789V2 display.
@@ -97,7 +105,9 @@ where
     /// A result indicating success or failure of the initialization.
     /// note: that this method will block until the display is initialized.
     /// note: there is a delay after each command to allow the display to process the command.
-    pub fn init(&mut self) -> Result<(), Error<stm32f4xx_hal::spi::Error, CS::Error, DC::Error, RST::Error>> {
+    pub fn init(
+        &mut self,
+    ) -> Result<(), Error<stm32f4xx_hal::spi::Error, CS::Error, DC::Error, RST::Error>> {
         // Reset the display
         self.rst.set_low().map_err(Error::RST)?;
         self.delay.delay_ms(120);
@@ -111,7 +121,7 @@ where
         self.delay.delay_ms(150);
 
         self.send_command(Commands::SetColorMode)?; // Set color mode
-        self.send_data(&[CMode])?; // Set to RGB565 color mode
+        self.send_data(&[C_MODE])?; // Set to RGB565 color mode
         self.delay.delay_ms(10);
 
         self.send_command(Commands::MemoryDataAccessControl)?; // Memory data access control
@@ -126,10 +136,11 @@ where
         Ok(())
     }
 
-
     /// Draws the screen with the provided buffer. uses W and H constants to determine the column address and row address.
-    pub fn draw_screen(&mut self, buffer: &[u8]) -> Result<(), Error<stm32f4xx_hal::spi::Error, CS::Error, DC::Error, RST::Error>> {
-
+    pub fn draw_screen(
+        &mut self,
+        buffer: &[u8],
+    ) -> Result<(), Error<stm32f4xx_hal::spi::Error, CS::Error, DC::Error, RST::Error>> {
         let y_offset = 20; // Y offset for the display
         let y_end = y_offset + H as u16 - 1; // Y end address for the display
 
@@ -150,13 +161,19 @@ where
         self.send_command(Commands::CASET)?;
         self.send_data(&[ca_start_msb, ca_start_lsb, ca_end_msb, ca_end_lsb])?;
 
-        info!("set column address: 0x{:02X} 0x{:02X} 0x{:02X} 0x{:02X}", ca_start_msb, ca_start_lsb, ca_end_msb, ca_end_lsb);
+        info!(
+            "set column address: 0x{:02X} 0x{:02X} 0x{:02X} 0x{:02X}",
+            ca_start_msb, ca_start_lsb, ca_end_msb, ca_end_lsb
+        );
 
         // Set the row address
         self.send_command(Commands::RASET)?;
         self.send_data(&[ra_start_msb, ra_start_lsb, ra_end_msb, ra_end_lsb])?;
 
-        info!("set row address: 0x{:02X} 0x{:02X} 0x{:02X} 0x{:02X}", ra_start_msb, ra_start_lsb, ra_end_msb, ra_end_lsb);
+        info!(
+            "set row address: 0x{:02X} 0x{:02X} 0x{:02X} 0x{:02X}",
+            ra_start_msb, ra_start_lsb, ra_end_msb, ra_end_lsb
+        );
 
         // Write memory
         self.send_command(Commands::RAMWR)?;
@@ -167,7 +184,10 @@ where
         Ok(())
     }
 
-    pub fn send_command(&mut self, cmd: Commands) -> Result<(), Error<stm32f4xx_hal::spi::Error, CS::Error, DC::Error, RST::Error>> {
+    pub fn send_command(
+        &mut self,
+        cmd: Commands,
+    ) -> Result<(), Error<stm32f4xx_hal::spi::Error, CS::Error, DC::Error, RST::Error>> {
         self.dc.set_low().map_err(Error::DC)?;
         self.cs.set_low().map_err(Error::CS)?;
         self.spi.write(&[cmd as u8]).map_err(Error::Spi)?;
@@ -176,7 +196,10 @@ where
         Ok(())
     }
 
-    pub fn send_data(&mut self, data: &[u8]) -> Result<(), Error<stm32f4xx_hal::spi::Error, CS::Error, DC::Error, RST::Error>> {
+    pub fn send_data(
+        &mut self,
+        data: &[u8],
+    ) -> Result<(), Error<stm32f4xx_hal::spi::Error, CS::Error, DC::Error, RST::Error>> {
         self.dc.set_high().map_err(Error::DC)?;
         self.cs.set_low().map_err(Error::CS)?;
         self.spi.write(data).map_err(Error::Spi)?;
