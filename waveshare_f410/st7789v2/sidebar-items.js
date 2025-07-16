@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ColorMode","Commands","Error"],"struct":["ST7789V2"]};
