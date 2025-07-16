@@ -1,4 +1,5 @@
 use cortex_m::delay::Delay;
+use defmt::println;
 use stm32f4xx_hal::{hal::{digital::{self, ErrorType, OutputPin}, spi::{self, SpiBus}}, spi::{Instance, Spi}};
 
 /// ST7789V2 driver for the ST7789V2 display.
@@ -133,13 +134,19 @@ where
         self.send_command(Commands::CASET)?;
         self.send_data(&[0x00, 0x00, ca_msb, ca_lsb])?;
 
+        println!("set column address: 0x00 0x00 0x{:02X} 0x{:02X}", ca_msb, ca_lsb);
+
         // Set the row address
         self.send_command(Commands::RASET)?;
         self.send_data(&[0x00, 0x00, ra_msb, ra_lsb])?;
 
+        println!("set row address: 0x00 0x00 0x{:02X} 0x{:02X}", ra_msb, ra_lsb);
+
         // Write memory
         self.send_command(Commands::RAMWR)?;
         self.send_data(buffer)?;
+
+        println!("draw screen with buffer of size: {}", buffer.len());
 
         Ok(())
     }

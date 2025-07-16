@@ -22,7 +22,10 @@ use crate::st7789v2::Commands;
 
 mod st7789v2;
 
+const W : usize = 240; // Width of the display
+const H : usize = 280; // Height of the display
 
+static BUFFER: [u8; W*H*2] = [0xEEu8; W * H * 2]; // Buffer for the display, 240x280 pixels, 16 bits per pixel (RGB565)
 
 #[entry]
 fn main() -> ! {
@@ -54,9 +57,6 @@ fn main() -> ! {
 
     println!("sysclk:{}\nhclk:{}\n", sfreq, hfreq);
 
-    const W : usize = 240; // Width of the display
-    const H : usize = 280; // Height of the display
-
     let pa = dp.GPIOA.split();
 
     let pa7_mosi = pa.pa7.into_push_pull_output().speed(Speed::VeryHigh).into_alternate();
@@ -79,21 +79,11 @@ fn main() -> ! {
         H  // height
     > = ST7789V2::new(spi, dc, rst, cs, &mut d);
 
-    let buffer = [0x00u8; W * H * 2]; // Buffer for the display, initialized to white (RGB565 format)
 
     st7789v2.init().expect("Failed to initialize ST7789V2 display");
     // manually drawing using send_data and send_command methods for testing from the buffer
 
-
-    st7789v2.send_command(Commands::CASET).unwrap();
-    st7789v2.send_data(&[0x00, 0x00, 0x00, (W - 1) as u8]).unwrap(); // column start/end
-
-    st7789v2.send_command(Commands::RASET).unwrap();
-    st7789v2.send_data(&[0x00, 0x00, ((H - 1) >> 8) as u8, ((H - 1) & 0xFF) as u8]).unwrap(); // row start/end
-
-    st7789v2.send_command(Commands::RAMWR).unwrap();
-    st7789v2.send_data(&buffer).unwrap(); // SEND WHOLE BUFFER AT ONCE!
-
+    st7789v2.draw_screen(&BUFFER).expect("Failed to draw screen");
 
     println!("Data sent successfully");
 
