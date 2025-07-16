@@ -5,7 +5,7 @@ use cortex_m::delay::Delay;
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::entry;
 
-use defmt::println;
+use defmt::{debug, info, println};
 use defmt_rtt as _;
 use panic_probe as _;
 use stm32f4xx_hal::gpio::{self, Speed};
@@ -16,6 +16,9 @@ use stm32f4xx_hal::spi::{Instance, Spi};
 use stm32f4xx_hal::{self, rcc::RccExt};
 use stm32f4xx_hal::prelude::*;
 use st7789v2::ST7789V2;
+use tinybmp::Bmp;
+use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::prelude::*;
 
 use crate::st7789v2::Commands;
 
@@ -25,10 +28,12 @@ mod st7789v2;
 const W : usize = 240; // Width of the display
 const H : usize = 280; // Height of the display
 
-static BUFFER: [u8; W*H*2] = [0xEEu8; W * H * 2]; // Buffer for the display, 240x280 pixels, 16 bits per pixel (RGB565)
+static BUFFER: &[u8] = include_bytes!("../output.rgb"); // RGB565 data for the display
+// static BUFFER: [u8; W * H * 2] = [0u8; W * H * 2]; // test black image
 
 #[entry]
 fn main() -> ! {
+    
 
     let dp = stm32f4xx_hal::pac::Peripherals::take().unwrap();
     let cp = cortex_m::Peripherals::take().unwrap();
@@ -50,12 +55,12 @@ fn main() -> ! {
     let src = syst.get_clock_source();
 
     if let SystClkSource::Core = src {
-        println!("using Core clock source");     // rtt is epic
+        info!("using Core clock source");     // rtt is epic
     } else {
-        println!("using external clock source");
+        info!("using external clock source");
     }
 
-    println!("sysclk:{}\nhclk:{}\n", sfreq, hfreq);
+    info!("sysclk:{}\thclk:{}", sfreq, hfreq);
 
     let pa = dp.GPIOA.split();
 
@@ -81,14 +86,12 @@ fn main() -> ! {
 
 
     st7789v2.init().expect("Failed to initialize ST7789V2 display");
-    // manually drawing using send_data and send_command methods for testing from the buffer
 
-    st7789v2.draw_screen(&BUFFER).expect("Failed to draw screen");
+    // let bmp_data = include_bytes!("../testimage.bmp");
+    // let _bmp: Bmp<Rgb565> = Bmp::from_slice(bmp_data).expect("Failed to load BMP image");
 
-    println!("Data sent successfully");
-
-
-
+    st7789v2.send_command(Commands::InversionOn).expect("Failed to enable inversion"); // Enable inversion since the display is inverted by default
+    st7789v2.draw_screen(BUFFER).expect("Failed to draw screen");
     loop {
     }
 }

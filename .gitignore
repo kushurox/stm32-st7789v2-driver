@@ -1,2 +1,7 @@
 /target
 testimage.png
+testimage.bmp
+*.rgb
+*.png
+*.bmp
+*.jpg

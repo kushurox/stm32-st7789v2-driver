@@ -1,5 +1,5 @@
 use cortex_m::delay::Delay;
-use defmt::println;
+use defmt::{debug, info, println};
 use stm32f4xx_hal::{hal::{digital::{self, ErrorType, OutputPin}, spi::{self, SpiBus}}, spi::{Instance, Spi}};
 
 /// ST7789V2 driver for the ST7789V2 display.
@@ -56,7 +56,9 @@ pub enum Commands {
     DisplayOn = 0x29,
     CASET = 0x2A,
     RASET = 0x2B,
-    RAMWR = 0x2C
+    RAMWR = 0x2C,
+    InversionOn = 0x21,
+    InversionOff = 0x20,
 }
 
 
@@ -113,7 +115,7 @@ where
         self.delay.delay_ms(10);
 
         self.send_command(Commands::MemoryDataAccessControl)?; // Memory data access control
-        self.send_data(&[0x00])?; // Set to normal mode (no rotation)
+        self.send_data(&[0b0000_0000])?; // Set to normal mode (no rotation)
         self.delay.delay_ms(10);
 
         self.send_command(Commands::DisplayOn)?; // Display on
@@ -128,25 +130,39 @@ where
     /// Draws the screen with the provided buffer. uses W and H constants to determine the column address and row address.
     pub fn draw_screen(&mut self, buffer: &[u8]) -> Result<(), Error<stm32f4xx_hal::spi::Error, CS::Error, DC::Error, RST::Error>> {
 
-        let (ca_msb, ca_lsb) = ((W >> 8) as u8, (W & 0xFF) as u8);
-        let (ra_msb, ra_lsb) = ((H >> 8) as u8, (H & 0xFF) as u8);
+        let y_offset = 20; // Y offset for the display
+        let y_end = y_offset + H as u16 - 1; // Y end address for the display
+
+        let x_offset = 0; // X offset for the display
+        let x_end = W as u16 - 1; // X end address for the
+
+        let ra_start_msb = (y_offset >> 8) as u8; // Row address start MSB
+        let ra_start_lsb = (y_offset & 0xFF) as u8; // Row address start LSB
+        let ra_end_msb = (y_end >> 8) as u8; // Row address end MSB
+        let ra_end_lsb = (y_end & 0xFF) as u8; // Row address end LSB
+
+        let ca_start_msb = (x_offset >> 8) as u8; // Column address start MSB
+        let ca_start_lsb = (x_offset & 0xFF) as u8; // Column address start LSB
+        let ca_end_msb = (x_end >> 8) as u8; // Column address end MSB
+        let ca_end_lsb = (x_end & 0xFF) as u8; // Column address end LSB
+
         // Set the column address
         self.send_command(Commands::CASET)?;
-        self.send_data(&[0x00, 0x00, ca_msb, ca_lsb])?;
+        self.send_data(&[ca_start_msb, ca_start_lsb, ca_end_msb, ca_end_lsb])?;
 
-        println!("set column address: 0x00 0x00 0x{:02X} 0x{:02X}", ca_msb, ca_lsb);
+        info!("set column address: 0x{:02X} 0x{:02X} 0x{:02X} 0x{:02X}", ca_start_msb, ca_start_lsb, ca_end_msb, ca_end_lsb);
 
         // Set the row address
         self.send_command(Commands::RASET)?;
-        self.send_data(&[0x00, 0x00, ra_msb, ra_lsb])?;
+        self.send_data(&[ra_start_msb, ra_start_lsb, ra_end_msb, ra_end_lsb])?;
 
-        println!("set row address: 0x00 0x00 0x{:02X} 0x{:02X}", ra_msb, ra_lsb);
+        info!("set row address: 0x{:02X} 0x{:02X} 0x{:02X} 0x{:02X}", ra_start_msb, ra_start_lsb, ra_end_msb, ra_end_lsb);
 
         // Write memory
         self.send_command(Commands::RAMWR)?;
         self.send_data(buffer)?;
 
-        println!("draw screen with buffer of size: {}", buffer.len());
+        info!("draw screen with buffer of size: {}", buffer.len());
 
         Ok(())
     }

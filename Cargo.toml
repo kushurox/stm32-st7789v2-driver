@@ -8,9 +8,11 @@ cortex-m = "0.7.7"
 cortex-m-rt = "0.7.5"
 defmt = "1.0.1"
 defmt-rtt = "1.0.0"
+embedded-graphics = "0.8.1"
 embedded-hal = "1.0.0"
 panic-probe = "1.0.0"
 stm32f4xx-hal = { version = "0.22.1", features = ["stm32f401", "defmt"] }
+tinybmp = "0.6.0"
 
 [features]
 default = ["stm32f401"]
