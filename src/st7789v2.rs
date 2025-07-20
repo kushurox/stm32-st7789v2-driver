@@ -207,4 +207,9 @@ where
 
         Ok(())
     }
+
+    pub fn release(self) -> (Spi<SPI>, DC, RST, CS) {
+        // Release the resources held by the driver
+        (self.spi, self.dc, self.rst, self.cs)
+    }
 }

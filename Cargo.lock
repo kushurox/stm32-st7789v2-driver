@@ -558,6 +558,7 @@ dependencies = [
  "defmt-rtt",
  "embedded-graphics",
  "embedded-hal 1.0.0",
+ "nb 1.1.0",
  "panic-probe",
  "stm32f4xx-hal",
  "tinybmp",
