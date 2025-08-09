@@ -21,9 +21,6 @@ use crate::st7789v2::ST7789V2DMA;
 
 mod st7789v2;
 
-const W: usize = 240; // Width of the display
-const H: usize = 280; // Height of the display
-
 // static BUFFER: &[u8] = include_bytes!("../output.rgb"); // RGB565 data for the display
 // static BUFFER: [u8; W * H * 2] = [0xF8; W * H * 2]; // Red pattern in RGB565 format for testing
 static BUFFER: &[u8] = include_bytes!("../output.rgb"); // RGB565 data for the display
@@ -95,7 +92,15 @@ fn main() -> ! {
     let tx = spi.use_dma().tx();
     let cmd_buf = singleton!(: [u8; 1] = [0; 1]).unwrap();
     let data_buf = singleton!(: [u8; 1] = [0; 1]).unwrap();
-    let mut dma_st = ST7789V2DMA::new(cs, dc, rst, tx, stream, &mut d, cmd_buf, data_buf);
+    
+    // Create ST7789V2DMA instance with Waveshare-specific configuration:
+    // For Waveshare 240x280 display we need:
+    // - Width: 240 (standard)
+    // - Height: 280 (Waveshare variant, standard ST7789 is 320)  
+    // - Offset: 20 (skip 20 non-visible rows at top, standard ST7789 uses 0)
+    // The generic parameters are: <'a, SPI, DMA, CS, DC, RST, CHANNEL, S, W, H, OFFSET>
+    let mut dma_st: ST7789V2DMA<'_, _, _, _, _, _, 3, 3, 240, 280, 20> = 
+        ST7789V2DMA::new(cs, dc, rst, tx, stream, &mut d, cmd_buf, data_buf);
     dma_st = dma_st.init();
     dma_st = dma_st.draw_entire_screen(BUFFER);
     dma_st.d.delay_ms(3000);

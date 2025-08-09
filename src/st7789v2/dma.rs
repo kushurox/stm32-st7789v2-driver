@@ -62,7 +62,8 @@ pub struct ST7789V2DMA<
     const CHANNEL: u8,
     const S: u8,
     const W: usize = 240,
-    const H: usize = 280,
+    const H: usize = 320,
+    const OFFSET: usize = 0,
 > where
     SPI: Instance + DMASet<StreamX<DMA, S>, CHANNEL, MemoryToPeripheral>,
 {
@@ -76,8 +77,8 @@ pub struct ST7789V2DMA<
     data_buf: &'static mut [u8; 1],
 }
 
-impl<'a, SPI, DMA, CS, DC, RST, const CHANNEL: u8, const S: u8>
-    ST7789V2DMA<'a, SPI, DMA, CS, DC, RST, CHANNEL, S>
+impl<'a, SPI, DMA, CS, DC, RST, const CHANNEL: u8, const S: u8, const W: usize, const H: usize, const OFFSET: usize>
+    ST7789V2DMA<'a, SPI, DMA, CS, DC, RST, CHANNEL, S, W, H, OFFSET>
 where
     SPI: Instance + DMASet<StreamX<DMA, S>, CHANNEL, MemoryToPeripheral>,
     CS: OutputPin,
@@ -150,13 +151,13 @@ where
     }
 
     pub fn draw_entire_screen(mut self, buffer: &'static [u8]) -> Self {
-        // Display has 20 non-visible rows at top and 20 at bottom
-        // So visible area is from row 20 to row 299 (280 visible rows)
+        // Display has OFFSET non-visible rows at top and bottom
+        // So visible area is from row OFFSET to row (OFFSET + H - 1)
         let x_start = 0u16; // Start at column 0
-        let x_end = 240u16 - 1; // End at column 239 (240 pixels wide)
+        let x_end = W as u16 - 1; // End at column (W-1)
 
-        let y_start = 20u16; // Start at row 20 (skip first 20 non-visible rows)
-        let y_end = y_start + 280u16 - 1; // End at row 299 (280 visible rows from 20 to 299)
+        let y_start = OFFSET as u16; // Start at row OFFSET (skip first OFFSET non-visible rows)
+        let y_end = y_start + H as u16 - 1; // End at row (OFFSET + H - 1)
 
         // Prepare CASET data (Column Address Set)
         let caset_data = unsafe { &mut *addr_of_mut!(CASET_DATA) };
@@ -173,8 +174,8 @@ where
         raset_data[3] = (y_end & 0xFF) as u8; // End row LSB
 
         debug!(
-            "Drawing {}x{} image at position ({},{}) to ({},{})",
-            240, 280, x_start, y_start, x_end, y_end
+            "Drawing {}x{} image at position ({},{}) to ({},{}) with offset {}",
+            W, H, x_start, y_start, x_end, y_end, OFFSET
         );
 
         // Send commands and address setup using macros for proper CS timing
@@ -192,7 +193,7 @@ where
         self.dc.set_high().ok(); // Set data mode for image data
         self.cs.set_low().ok(); // Select device for entire transfer
 
-        let chunk_size = 32 * 1024; // 32KB chunks
+        let chunk_size = 64 * 1024; // 64KB chunks
 
         for chunk in buffer.chunks(chunk_size) {
             self = self.send_data_raw(chunk);
