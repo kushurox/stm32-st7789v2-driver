@@ -5,3 +5,5 @@ testimage.bmp
 *.png
 *.bmp
 *.jpg
+src/snippets.rs
+examples/test_*

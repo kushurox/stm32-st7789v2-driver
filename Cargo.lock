@@ -549,7 +549,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "waveshare_f410"
+name = "waveshare_f401"
 version = "0.1.0"
 dependencies = [
  "cortex-m",

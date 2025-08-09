@@ -1,5 +1,5 @@
 [package]
-name = "waveshare_f410"
+name = "waveshare_f401"
 version = "0.1.0"
 edition = "2024"
 
@@ -19,9 +19,14 @@ tinybmp = "0.6.0"
 default = ["stm32f401"]
 stm32f401 = []
 
+[lib]
+name = "waveshare_f401"
+test = false
+bench = false
+
 # this lets you use `cargo fix`!
 [[bin]]
-name = "waveshare_f410"
+name = "waveshare_f401"
 test = false
 bench = false
 

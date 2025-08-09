@@ -1,9 +1,8 @@
+use crate::st7789v2::common::{ColorMode, Commands, Error};
 use cortex_m::delay::Delay;
-use defmt::info;
+use defmt::debug;
 use stm32f4xx_hal::{
-    hal::{
-        digital::OutputPin,
-    },
+    hal::digital::OutputPin,
     spi::{Instance, Spi},
 };
 
@@ -11,7 +10,7 @@ use stm32f4xx_hal::{
 /// This driver uses SPI for communication and requires a data/command pin, a reset pin,
 /// and a chip select pin.
 /// TODO: Implement DMA support for faster data transfer.
-pub struct ST7789V2<'a, SPI, DC, RST, CS, const W: usize, const H: usize, const C_MODE: u8 = 0x55>
+pub struct ST7789V2<'a, SPI, DC, RST, CS, const W: usize, const H: usize>
 where
     SPI: Instance,
     DC: OutputPin,
@@ -25,55 +24,13 @@ where
     delay: &'a mut Delay,
 }
 
-/// Error type for the ST7789V2 driver.
-/// It is a generic error type that can be used to handle errors from the SPI, CS and DC pins.
-#[allow(dead_code)]
-#[derive(Debug)]
-pub enum Error<SpiE, CSE, DCE, RSE> {
-    Spi(SpiE),
-    CS(CSE),
-    DC(DCE),
-    RST(RSE),
-}
-
-/// Color mode for the ST7789V2 display.
-/// This enum defines the color mode used by the display.
-/// Currently, only RGB565 (16-bit color mode) is supported.
-#[repr(u8)]
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
-enum ColorMode {
-    RGB565 = 0x55, // 16-bit color mode
-}
-
-/// Commands for the ST7789V2 display.
-/// This enum defines the commands used to control the display.
-/// TODO: Add more commands as needed.
-#[repr(u8)]
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
-pub enum Commands {
-    SoftwareReset = 0x01,
-    SleepOut = 0x11,
-    SetColorMode = 0x3A,
-    MemoryDataAccessControl = 0x36,
-    DisplayOn = 0x29,
-    CASET = 0x2A,
-    RASET = 0x2B,
-    RAMWR = 0x2C,
-    InversionOn = 0x21,
-    InversionOff = 0x20,
-}
-
-impl<'a, SPI, DC, RST, CS, const W: usize, const H: usize, const C_MODE: u8>
-    ST7789V2<'a, SPI, DC, RST, CS, W, H, C_MODE>
+impl<'a, SPI, DC, RST, CS, const W: usize, const H: usize> ST7789V2<'a, SPI, DC, RST, CS, W, H>
 where
     SPI: Instance,
     DC: OutputPin,
     RST: OutputPin,
     CS: OutputPin,
 {
-
     /// Creates a new instance of the ST7789V2 driver.
     /// # Arguments
     /// * `spi` - The SPI interface to use for communication. must be initialized.
@@ -121,7 +78,7 @@ where
         self.delay.delay_ms(150);
 
         self.send_command(Commands::SetColorMode)?; // Set color mode
-        self.send_data(&[C_MODE])?; // Set to RGB565 color mode
+        self.send_data(&[0x55])?; // Set to RGB565 color mode
         self.delay.delay_ms(10);
 
         self.send_command(Commands::MemoryDataAccessControl)?; // Memory data access control
@@ -161,7 +118,7 @@ where
         self.send_command(Commands::CASET)?;
         self.send_data(&[ca_start_msb, ca_start_lsb, ca_end_msb, ca_end_lsb])?;
 
-        info!(
+        debug!(
             "set column address: 0x{:02X} 0x{:02X} 0x{:02X} 0x{:02X}",
             ca_start_msb, ca_start_lsb, ca_end_msb, ca_end_lsb
         );
@@ -170,7 +127,7 @@ where
         self.send_command(Commands::RASET)?;
         self.send_data(&[ra_start_msb, ra_start_lsb, ra_end_msb, ra_end_lsb])?;
 
-        info!(
+        debug!(
             "set row address: 0x{:02X} 0x{:02X} 0x{:02X} 0x{:02X}",
             ra_start_msb, ra_start_lsb, ra_end_msb, ra_end_lsb
         );
@@ -179,7 +136,7 @@ where
         self.send_command(Commands::RAMWR)?;
         self.send_data(buffer)?;
 
-        info!("draw screen with buffer of size: {}", buffer.len());
+        debug!("draw screen with buffer of size: {}", buffer.len());
 
         Ok(())
     }
