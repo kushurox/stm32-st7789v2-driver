@@ -1,10 +1,7 @@
 use crate::st7789v2::common::{ColorMode, Commands};
-use core::ptr::{addr_of_mut, read_volatile};
-use core::sync::atomic::{Ordering, compiler_fence};
 use cortex_m::delay::Delay;
-use defmt::{debug, info};
+use defmt::debug;
 use stm32f4xx_hal::{
-    ReadFlags,
     dma::{
         ChannelX, MemoryToPeripheral, StreamX, Transfer,
         config::DmaConfig,
@@ -15,9 +12,8 @@ use stm32f4xx_hal::{
     spi::{Instance, Tx},
 };
 
-// Static buffers for DMA transfers - these need to be global for the 'static lifetime
-static mut CASET_DATA: [u8; 4] = [0; 4]; // Column address set data buffer
-static mut RASET_DATA: [u8; 4] = [0; 4]; // Row address set data buffer
+// Note: CASET and RASET buffers are now user-provided via singleton!
+// This makes memory allocation explicit and user-controlled
 
 // Macro for handling CS timing with commands
 macro_rules! cs_command {
@@ -41,13 +37,14 @@ macro_rules! cs_data {
     }};
 }
 
-// Macro for handling CS timing with data arrays
-macro_rules! cs_data_array {
-    ($self:expr, $data:expr, $delay_ms:expr) => {{
-        $self.cs.set_low().ok(); // Select device
-        $self = $self.send_data($data); // Send data array (CS stays low)
-        $self.d.delay_ms($delay_ms); // Delay while CS is still low for processing
-        $self.cs.set_high().ok(); // Deselect device after delay
+// Macro for command+data sequence with proper CS timing
+macro_rules! cs_command_data_sequence {
+    ($self:expr, $cmd:expr, $data_method:ident, $cmd_delay:expr, $data_delay:expr) => {{
+        $self.cs.set_low().ok(); // Select device for entire sequence
+        $self = $self.send_command($cmd); // Send command (CS stays low)
+        $self.d.delay_ms($cmd_delay); // Command processing delay
+        $self = $self.$data_method($data_delay); // Send data (CS stays low)
+        $self.cs.set_high().ok(); // Deselect device after entire sequence
         $self
     }};
 }
@@ -62,8 +59,8 @@ pub struct ST7789V2DMA<
     const CHANNEL: u8,
     const S: u8,
     const W: usize = 240,
-    const H: usize = 320,
-    const OFFSET: usize = 0,
+    const H: usize = 280,
+    const OFFSET: usize = 20,
 > where
     SPI: Instance + DMASet<StreamX<DMA, S>, CHANNEL, MemoryToPeripheral>,
 {
@@ -75,6 +72,8 @@ pub struct ST7789V2DMA<
     pub d: &'a mut Delay,
     cmd_buf: &'static mut [u8; 1],
     data_buf: &'static mut [u8; 1],
+    caset_buf: &'static mut [u8; 4], // Column address set buffer (user-provided)
+    raset_buf: &'static mut [u8; 4], // Row address set buffer (user-provided)
 }
 
 impl<'a, SPI, DMA, CS, DC, RST, const CHANNEL: u8, const S: u8, const W: usize, const H: usize, const OFFSET: usize>
@@ -97,6 +96,8 @@ where
         d: &'a mut Delay,
         cmd_buf: &'static mut [u8; 1],
         data_buf: &'static mut [u8; 1],
+        caset_buf: &'static mut [u8; 4], // User-provided column address buffer
+        raset_buf: &'static mut [u8; 4], // User-provided row address buffer
     ) -> Self {
         Self {
             cs,
@@ -107,6 +108,8 @@ where
             d,
             cmd_buf: cmd_buf,
             data_buf: data_buf,
+            caset_buf,
+            raset_buf,
         }
     }
 
@@ -159,32 +162,28 @@ where
         let y_start = OFFSET as u16; // Start at row OFFSET (skip first OFFSET non-visible rows)
         let y_end = y_start + H as u16 - 1; // End at row (OFFSET + H - 1)
 
-        // Prepare CASET data (Column Address Set)
-        let caset_data = unsafe { &mut *addr_of_mut!(CASET_DATA) };
-        caset_data[0] = (x_start >> 8) as u8; // Start column MSB
-        caset_data[1] = (x_start & 0xFF) as u8; // Start column LSB
-        caset_data[2] = (x_end >> 8) as u8; // End column MSB
-        caset_data[3] = (x_end & 0xFF) as u8; // End column LSB
+        // Prepare CASET data (Column Address Set) using member buffer
+        self.caset_buf[0] = (x_start >> 8) as u8; // Start column MSB
+        self.caset_buf[1] = (x_start & 0xFF) as u8; // Start column LSB
+        self.caset_buf[2] = (x_end >> 8) as u8; // End column MSB
+        self.caset_buf[3] = (x_end & 0xFF) as u8; // End column LSB
 
-        // Prepare RASET data (Row Address Set)
-        let raset_data = unsafe { &mut *addr_of_mut!(RASET_DATA) };
-        raset_data[0] = (y_start >> 8) as u8; // Start row MSB
-        raset_data[1] = (y_start & 0xFF) as u8; // Start row LSB
-        raset_data[2] = (y_end >> 8) as u8; // End row MSB
-        raset_data[3] = (y_end & 0xFF) as u8; // End row LSB
+        // Prepare RASET data (Row Address Set) using member buffer
+        self.raset_buf[0] = (y_start >> 8) as u8; // Start row MSB
+        self.raset_buf[1] = (y_start & 0xFF) as u8; // Start row LSB
+        self.raset_buf[2] = (y_end >> 8) as u8; // End row MSB
+        self.raset_buf[3] = (y_end & 0xFF) as u8; // End row LSB
 
         debug!(
             "Drawing {}x{} image at position ({},{}) to ({},{}) with offset {}",
             W, H, x_start, y_start, x_end, y_end, OFFSET
         );
 
-        // Send commands and address setup using macros for proper CS timing
-        self = cs_command!(self, Commands::CASET, 1);
-        self = cs_data_array!(self, caset_data, 1);
+        // Send commands and address setup using unified macro for proper CS timing
+        self = cs_command_data_sequence!(self, Commands::CASET, send_caset_data_safe, 1, 1);
         debug!("Column address set command sent");
 
-        self = cs_command!(self, Commands::RASET, 1);
-        self = cs_data_array!(self, raset_data, 1);
+        self = cs_command_data_sequence!(self, Commands::RASET, send_raset_data_safe, 1, 1);
         debug!("Row address set command sent");
 
         self = cs_command!(self, Commands::RAMWR, 10);
@@ -193,7 +192,7 @@ where
         self.dc.set_high().ok(); // Set data mode for image data
         self.cs.set_low().ok(); // Select device for entire transfer
 
-        let chunk_size = 64 * 1024; // 64KB chunks
+        let chunk_size = 32 * 1024; // 32KB chunks
 
         for chunk in buffer.chunks(chunk_size) {
             self = self.send_data_raw(chunk);
@@ -284,19 +283,45 @@ where
         self
     }
 
-    fn send_data(mut self, data: &'static [u8]) -> Self {
-        self.dc.set_high().ok();
+    fn send_caset_data_safe(mut self, delay_ms: u32) -> Self {
+        // CS is already LOW from macro, just send data
+        self.dc.set_high().ok(); // Data mode
+        
         let config = DmaConfig::default()
             .peripheral_increment(false)
             .memory_increment(true)
             .fifo_enable(false)
             .transfer_complete_interrupt(false);
-        let mut tf = Transfer::init_memory_to_peripheral(self.st, self.tx, data, None, config);
+        let mut tf = Transfer::init_memory_to_peripheral(self.st, self.tx, self.caset_buf, None, config);
         tf.start(|_| {});
         tf.wait();
-        let (st, tx, _, _) = tf.release();
+        let (st, tx, caset_buf, _) = tf.release();
         self.st = st;
         self.tx = tx;
+        self.caset_buf = caset_buf;
+        
+        self.d.delay_ms(delay_ms); // Data processing delay
+        self
+    }
+
+    fn send_raset_data_safe(mut self, delay_ms: u32) -> Self {
+        // CS is already LOW from macro, just send data
+        self.dc.set_high().ok(); // Data mode
+        
+        let config = DmaConfig::default()
+            .peripheral_increment(false)
+            .memory_increment(true)
+            .fifo_enable(false)
+            .transfer_complete_interrupt(false);
+        let mut tf = Transfer::init_memory_to_peripheral(self.st, self.tx, self.raset_buf, None, config);
+        tf.start(|_| {});
+        tf.wait();
+        let (st, tx, raset_buf, _) = tf.release();
+        self.st = st;
+        self.tx = tx;
+        self.raset_buf = raset_buf;
+        
+        self.d.delay_ms(delay_ms); // Data processing delay
         self
     }
 
