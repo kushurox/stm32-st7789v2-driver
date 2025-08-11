@@ -1,3 +1,5 @@
+use core::mem::transmute;
+
 use crate::st7789v2::common::{ColorMode, Commands};
 use cortex_m::delay::Delay;
 use defmt::debug;
@@ -203,6 +205,71 @@ where
         self
     }
 
+    pub fn set_size(mut self, xs: u16, xe: u16, ys: u16, ye: u16) -> Self{
+        // sets CASET and RASET based on given width and height
+        // accounts for offset based on OFFSET
+
+        let actual_ys = ys + OFFSET as u16;
+        let actual_ye = ye + OFFSET as u16;
+
+        self.caset_buf[0] = (xs >> 8) as u8; // Start column MSB
+        self.caset_buf[1] = (xs & 0xFF) as u8; // Start column LSB
+        self.caset_buf[2] = (xe >> 8) as u8; // End column MSB
+        self.caset_buf[3] = (xe & 0xFF) as u8; // End column LSB
+
+        self.raset_buf[0] = (actual_ys >> 8) as u8; // Start row MSB
+        self.raset_buf[1] = (actual_ys & 0xFF) as u8; // Start row LSB
+        self.raset_buf[2] = (actual_ye >> 8) as u8; // End row MSB
+        self.raset_buf[3] = (actual_ye & 0xFF) as u8; // End row LSB
+
+        self = cs_command_data_sequence!(self, Commands::CASET, send_caset_data_safe, 1, 1);
+        self = cs_command_data_sequence!(self, Commands::RASET, send_raset_data_safe, 1, 1);
+
+        self
+    }
+
+    pub fn begin_draw(mut self) -> Self {
+        self = cs_command!(self, Commands::RAMWR, 10);
+        self
+    }
+
+    pub fn send_frame(mut self, buffer: &'static [u8]) -> Self {
+        // must ensure begin_draw is called, before this method externally
+        // buffer length must be correct as per selected width and height
+        let chunk_size = 32 * 1024; // 32KB chunks
+
+        self.dc.set_high().ok(); // Set data mode for image data
+        self.cs.set_low().ok(); // Select device for entire transfer
+
+        for chunk in buffer.chunks(chunk_size) {
+            self = self.send_data_raw(chunk);
+        }
+
+        self.cs.set_high().ok(); // Deselect device after all chunks
+
+        self
+    }
+
+    pub fn draw_color_entire_screen(mut self, color: u16)  -> Self{
+        // draws color without using large buffer by tiling to save memory
+        // creates small 2Kb buffer to hold color value and sends it repeatedly
+        let color_buffer = [color as u8; 2 * 1024]; // 2KB buffer
+        self = self.set_size(0, 240, 0, 320).begin_draw();
+
+        let data: &'static [u8] = unsafe { transmute(color_buffer.as_slice()) }; // because the transfer doesnt outlive this
+
+        self.dc.set_high().ok(); // Set data mode for image data
+        self.cs.set_low().ok(); // Select device for entire transfer
+
+        for _ in 0..((W * H * 2) / (2 * 1024) + 1) { // +1 to account for any remaining data
+            self = self.send_data_raw(data)
+        }
+
+        self.cs.set_high().ok(); // Deselect device after all chunks
+
+        self
+    }
+
     pub fn off(mut self) -> Self {
         cs_command!(self, Commands::DisplayOff, 50)
     }
@@ -340,5 +407,16 @@ where
         self.tx = tx;
         self
     }
+
+    pub fn select(&mut self) -> &mut Self {
+        self.cs.set_low().ok(); // Select the device
+        self
+    }
+
+    pub fn deselect(&mut self) -> &mut Self {
+        self.cs.set_high().ok(); // Deselect the device
+        self
+    }
+
     // Additional methods for DMA operations can be added here
 }

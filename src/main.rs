@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+use core::mem::transmute;
+use core::ptr::addr_of_mut;
+
 use cortex_m::delay::Delay;
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m::singleton;
@@ -8,6 +11,14 @@ use cortex_m_rt::entry;
 
 use defmt::info;
 use defmt_rtt as _;
+use embedded_graphics::framebuffer::{buffer_size, Framebuffer};
+use embedded_graphics::mono_font::ascii::{self, FONT_6X10};
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::pixelcolor::raw::BigEndian;
+use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Alignment, Text};
 use panic_probe as _;
 use stm32f4xx_hal::dma::StreamsTuple;
 use stm32f4xx_hal::dwt::DwtExt;
@@ -28,8 +39,8 @@ const H: usize = 280; // Display height
 const OFFSET: usize = 20; // Non-visible rows at the top
 
 // static BUFFER: &[u8] = include_bytes!("../output.rgb"); // RGB565 data for the display
-// static BUFFER: [u8; W * H * 2] = [0xF8; W * H * 2]; // Red pattern in RGB565 format for testing
-static BUFFER: &[u8] = include_bytes!("../output.rgb"); // RGB565 data for the display
+// static BUFFER: [u8; 100 * 100 * 2] = [0xE8; 100 * 100 * 2]; // Red pattern in RGB565 format for testing
+// static BUFFER: &[u8] = include_bytes!("../output.rgb"); // RGB565 data for the display
 
 #[entry]
 fn main() -> ! {
@@ -43,8 +54,8 @@ fn main() -> ! {
     let clocks = rcc
         .cfgr
         .use_hse(25.MHz())
-        .sysclk(48.MHz())
-        .hclk(48.MHz())
+        .sysclk(32.MHz())
+        .hclk(32.MHz())
         .freeze();
 
     let sfreq = clocks.sysclk().raw();
@@ -85,7 +96,7 @@ fn main() -> ! {
         dp.SPI1,
         (pa5_sck, false_pin, pa7_mosi),
         mode,
-        12.MHz(), // Reduced from 12MHz to 6MHz for large transfers
+        12.MHz(),
         &clocks,
     );
     let dc = pa.pa4.into_push_pull_output().speed(Speed::VeryHigh); // high for data and low for command
@@ -103,26 +114,23 @@ fn main() -> ! {
     let caset_buf = singleton!(: [u8; 4] = [0; 4]).unwrap(); // Column address buffer
     let raset_buf = singleton!(: [u8; 4] = [0; 4]).unwrap(); // Row address buffer
     
-    // Create ST7789V2DMA instance with Waveshare-specific configuration:
-    // For Waveshare 240x280 display we need:
-    // - Width: 240 (standard)
-    // - Height: 280 (Waveshare variant, standard ST7789 is 320)  
-    // - Offset: 20 (skip 20 non-visible rows at top, standard ST7789 uses 0)
-    // The generic parameters are: <'a, SPI, DMA, CS, DC, RST, CHANNEL, S, W, H, OFFSET>
-    // All memory buffers are explicitly allocated by user via singleton!
+
     let mut dma_st: ST7789V2DMA<'_, _, _, _, _, _, 3, 3, W, H, OFFSET> = 
         ST7789V2DMA::new(cs, dc, rst, tx, stream, &mut d, cmd_buf, data_buf, caset_buf, raset_buf);
     dma_st = dma_st.init();
-    let t = cdwt.measure(|| {
-        dma_st = dma_st.draw_entire_screen(BUFFER);
-    });
-    
-    info!("draw_entire_screen took {} ms", t.as_millis());
+
+    let fb: Framebuffer<Rgb565, _, BigEndian, W, 56, {buffer_size::<Rgb565>(W, 56)}> = Framebuffer::new();
+
+    let rs = PrimitiveStyle::with_fill(Rgb565::YELLOW);
+    let ret = Rectangle::zero().into_styled(rs);
+
+
+
+    // dma_st.draw_color_entire_screen(0x00);
+
+
     // dma_st.d.delay_ms(3000);
     // dma_st.off();
 
     loop {}
 }
-
-#[interrupt]
-fn DMA2_STREAM3() {}
