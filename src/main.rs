@@ -1,8 +1,6 @@
 #![no_std]
 #![no_main]
 
-use core::mem::transmute;
-use core::ptr::addr_of_mut;
 
 use cortex_m::delay::Delay;
 use cortex_m::peripheral::syst::SystClkSource;
@@ -12,25 +10,20 @@ use cortex_m_rt::entry;
 use defmt::info;
 use defmt_rtt as _;
 use embedded_graphics::framebuffer::{buffer_size, Framebuffer};
-use embedded_graphics::mono_font::ascii::{self, FONT_6X10};
-use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::raw::BigEndian;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Alignment, Text};
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use panic_probe as _;
 use stm32f4xx_hal::dma::StreamsTuple;
 use stm32f4xx_hal::dwt::DwtExt;
 use stm32f4xx_hal::gpio::{self, Speed};
 use stm32f4xx_hal::hal::spi::{self, Phase, Polarity};
-use stm32f4xx_hal::interrupt;
-use stm32f4xx_hal::pac::DWT;
 use stm32f4xx_hal::prelude::*;
 use stm32f4xx_hal::spi::Spi;
 use stm32f4xx_hal::{self, rcc::RccExt};
 
-use crate::st7789v2::ST7789V2DMA;
+use crate::st7789v2::dma::st7789v2dma::ST7789V2DMA;
 
 mod st7789v2;
 
@@ -117,16 +110,9 @@ fn main() -> ! {
 
     let mut dma_st: ST7789V2DMA<'_, _, _, _, _, _, 3, 3, W, H, OFFSET> = 
         ST7789V2DMA::new(cs, dc, rst, tx, stream, &mut d, cmd_buf, data_buf, caset_buf, raset_buf);
-    dma_st = dma_st.init();
+    
+    dma_st.init();
 
-    let fb: Framebuffer<Rgb565, _, BigEndian, W, 56, {buffer_size::<Rgb565>(W, 56)}> = Framebuffer::new();
-
-    let rs = PrimitiveStyle::with_fill(Rgb565::YELLOW);
-    let ret = Rectangle::zero().into_styled(rs);
-
-
-
-    // dma_st.draw_color_entire_screen(0x00);
 
 
     // dma_st.d.delay_ms(3000);

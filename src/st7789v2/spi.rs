@@ -1,9 +1,8 @@
-use crate::st7789v2::common::{ColorMode, Commands, Error};
+use crate::st7789v2::common::{Commands, Error};
 use cortex_m::delay::Delay;
 use defmt::debug;
 use stm32f4xx_hal::{
-    hal::digital::OutputPin,
-    spi::{Instance, Spi},
+    hal::digital::OutputPin, spi::{Instance, Spi}
 };
 
 /// ST7789V2 driver for the ST7789V2 display.

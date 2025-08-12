@@ -1,4 +1,3 @@
-use stm32f4xx_hal::hal::digital::OutputPin;
 
 /// Error type for the ST7789V2 driver.
 /// It is a generic error type that can be used to handle errors from the SPI, CS and DC pins.
