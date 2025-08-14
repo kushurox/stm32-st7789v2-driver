@@ -113,12 +113,14 @@ fn main() -> ! {
 
     let r = Rectangle::new(dma_st.bounding_box().top_left, Size::new(W as u32, H as u32));
 
-    dma_st.fill_contiguous(&r, core::iter::repeat(Rgb565::BLUE)).ok();
+    let measure = cdwt.measure(|| {
+        dma_st.fill_contiguous(&r, core::iter::repeat(Rgb565::RED)).ok();
+    });
 
+    info!("DMA transfer completed in {} ms", measure.as_millis());
 
-
-    dma_st.d.delay_ms(3000);
-    dma_st.clear(Rgb565::WHITE).ok();
+    // dma_st.d.delay_ms(3000);
+    // dma_st.clear(Rgb565::WHITE).ok();
 
     loop {}
 }

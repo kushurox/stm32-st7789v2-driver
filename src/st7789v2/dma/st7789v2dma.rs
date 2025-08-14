@@ -156,7 +156,7 @@ where
 
     #[inline(always)]
     pub fn begin_draw(&mut self){
-        cs_command!(self, Commands::RAMWR, 10);
+        cs_command!(self, Commands::RAMWR, 1);
     }
 
     pub fn off(&mut self) {

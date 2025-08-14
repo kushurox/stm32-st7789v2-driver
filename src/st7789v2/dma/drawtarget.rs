@@ -69,7 +69,7 @@ where
         self.dc.set_high().ok();
         self.select();
 
-        for _ in 0..(2 * width * height) {
+        for _ in 0..(width * height) {
             if idx + 2 > buf_len {
                 chunk_buffer = self.send_data_chunk(chunk_buffer);
                 idx = 0;
