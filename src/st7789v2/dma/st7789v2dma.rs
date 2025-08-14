@@ -1,9 +1,7 @@
-use core::mem::{self, transmute};
 
 use crate::{cs_command, cs_command_data_sequence, cs_data, st7789v2::common::{ColorMode, Commands}};
 use cortex_m::delay::Delay;
 use defmt::debug;
-use embedded_graphics::{pixelcolor::Rgb565, prelude::{Dimensions, DrawTarget, OriginDimensions, PointsIter, Size}, Drawable};
 use stm32f4xx_hal::{
     dma::{
         ChannelX, MemoryToPeripheral, StreamX, Transfer,
@@ -20,6 +18,8 @@ use stm32f4xx_hal::{
 
 // Macro for handling CS timing with commands
 
+pub const CHUNK_SIZE: usize = 1024 * 4;
+
 pub struct ST7789V2DMA<
     'a,
     SPI,
@@ -35,16 +35,17 @@ pub struct ST7789V2DMA<
 > where
     SPI: Instance + DMASet<StreamX<DMA, S>, CHANNEL, MemoryToPeripheral>,
 {
-    cs: CS,
-    dc: DC,
+    pub(super) cs: CS,
+    pub(super) dc: DC,
     rst: RST,
-    tx: Tx<SPI>,
-    st: StreamX<DMA, S>,
+    pub(super) tx: Option<Tx<SPI>>,
+    pub(super) st: Option<StreamX<DMA, S>>,
     pub d: &'a mut Delay,
-    cmd_buf: &'static mut [u8; 1],
-    data_buf: &'static mut [u8; 1],
-    caset_buf: &'static mut [u8; 4], // Column address set buffer (user-provided)
-    raset_buf: &'static mut [u8; 4], // Row address set buffer (user-provided)
+    cmd_buf: Option<&'static mut [u8; 1]>,
+    data_buf: Option<&'static mut [u8; 1]>,
+    caset_buf: Option<&'static mut [u8; 4]>, // Column address set buffer (user-provided)
+    raset_buf: Option<&'static mut [u8; 4]>, // Row address set buffer (user-provided)
+    pub(super) chunk_buffer: Option<&'static mut [u8; CHUNK_SIZE]>,
 }
 
 impl<'a, SPI, DMA, CS, DC, RST, const CHANNEL: u8, const S: u8, const W: usize, const H: usize, const OFFSET: usize>
@@ -69,18 +70,20 @@ where
         data_buf: &'static mut [u8; 1],
         caset_buf: &'static mut [u8; 4], // User-provided column address buffer
         raset_buf: &'static mut [u8; 4], // User-provided row address buffer
+        chunk_buffer: &'static mut [u8; CHUNK_SIZE],
     ) -> Self {
         Self {
             cs,
             dc,
             rst,
-            tx,
-            st,
+            tx: Some(tx),
+            st: Some(st),
             d,
-            cmd_buf: cmd_buf,
-            data_buf: data_buf,
-            caset_buf,
-            raset_buf,
+            cmd_buf: Some(cmd_buf),
+            data_buf: Some(data_buf),
+            caset_buf: Some(caset_buf),
+            raset_buf: Some(raset_buf),
+            chunk_buffer: Some(chunk_buffer),
         }
     }
 
@@ -123,54 +126,6 @@ where
 
     }
 
-    pub fn draw_entire_screen(&mut self, buffer: &'static [u8]){
-        // Display has OFFSET non-visible rows at top and bottom
-        // So visible area is from row OFFSET to row (OFFSET + H - 1)
-        let x_start = 0u16; // Start at column 0
-        let x_end = W as u16 - 1; // End at column (W-1)
-
-        let y_start = OFFSET as u16; // Start at row OFFSET (skip first OFFSET non-visible rows)
-        let y_end = y_start + H as u16 - 1; // End at row (OFFSET + H - 1)
-
-        // Prepare CASET data (Column Address Set) using member buffer
-        self.caset_buf[0] = (x_start >> 8) as u8; // Start column MSB
-        self.caset_buf[1] = (x_start & 0xFF) as u8; // Start column LSB
-        self.caset_buf[2] = (x_end >> 8) as u8; // End column MSB
-        self.caset_buf[3] = (x_end & 0xFF) as u8; // End column LSB
-
-        // Prepare RASET data (Row Address Set) using member buffer
-        self.raset_buf[0] = (y_start >> 8) as u8; // Start row MSB
-        self.raset_buf[1] = (y_start & 0xFF) as u8; // Start row LSB
-        self.raset_buf[2] = (y_end >> 8) as u8; // End row MSB
-        self.raset_buf[3] = (y_end & 0xFF) as u8; // End row LSB
-
-        debug!(
-            "Drawing {}x{} image at position ({},{}) to ({},{}) with offset {}",
-            W, H, x_start, y_start, x_end, y_end, OFFSET
-        );
-
-        // Send commands and address setup using unified macro for proper CS timing
-        cs_command_data_sequence!(self, Commands::CASET, send_caset_data_safe, 1, 1);
-        debug!("Column address set command sent");
-
-        cs_command_data_sequence!(self, Commands::RASET, send_raset_data_safe, 1, 1);
-        debug!("Row address set command sent");
-
-        cs_command!(self, Commands::RAMWR, 10);
-
-        // Now send the image data in chunks with CS low for entire transfer (like working code)
-        self.dc.set_high().ok(); // Set data mode for image data
-        self.cs.set_low().ok(); // Select device for entire transfer
-
-        let chunk_size = 32 * 1024; // 32KB chunks
-
-        for chunk in buffer.chunks(chunk_size) {
-            self.send_data_raw(chunk);
-        }
-
-        self.cs.set_high().ok(); // Deselect device after all chunks
-    }
-
     pub fn set_size(&mut self, xs: u16, xe: u16, ys: u16, ye: u16) {
         // sets CASET and RASET based on given width and height
         // accounts for offset based on OFFSET
@@ -178,59 +133,30 @@ where
         let actual_ys = ys + OFFSET as u16;
         let actual_ye = ye + OFFSET as u16;
 
-        self.caset_buf[0] = (xs >> 8) as u8; // Start column MSB
-        self.caset_buf[1] = (xs & 0xFF) as u8; // Start column LSB
-        self.caset_buf[2] = (xe >> 8) as u8; // End column MSB
-        self.caset_buf[3] = (xe & 0xFF) as u8; // End column LSB
+        let caset_buf = self.caset_buf.take().unwrap();
+        let raset_buf = self.raset_buf.take().unwrap();
 
-        self.raset_buf[0] = (actual_ys >> 8) as u8; // Start row MSB
-        self.raset_buf[1] = (actual_ys & 0xFF) as u8; // Start row LSB
-        self.raset_buf[2] = (actual_ye >> 8) as u8; // End row MSB
-        self.raset_buf[3] = (actual_ye & 0xFF) as u8; // End row LSB
+        caset_buf[0] = (xs >> 8) as u8; // Start column MSB
+        caset_buf[1] = (xs & 0xFF) as u8; // Start column LSB
+        caset_buf[2] = (xe >> 8) as u8; // End column MSB
+        caset_buf[3] = (xe & 0xFF) as u8; // End column LSB
+
+        raset_buf[0] = (actual_ys >> 8) as u8; // Start row MSB
+        raset_buf[1] = (actual_ys & 0xFF) as u8; // Start row LSB
+        raset_buf[2] = (actual_ye >> 8) as u8; // End row MSB
+        raset_buf[3] = (actual_ye & 0xFF) as u8; // End row LSB
+
+        self.caset_buf = Some(caset_buf);
+        self.raset_buf = Some(raset_buf);
 
         cs_command_data_sequence!(self, Commands::CASET, send_caset_data_safe, 1, 1);
         cs_command_data_sequence!(self, Commands::RASET, send_raset_data_safe, 1, 1);
 
     }
 
+    #[inline(always)]
     pub fn begin_draw(&mut self){
         cs_command!(self, Commands::RAMWR, 10);
-    }
-
-    pub fn send_frame(&mut self, buffer: &'static [u8]){
-        // must ensure begin_draw is called, before this method externally
-        // buffer length must be correct as per selected width and height
-        let chunk_size = 32 * 1024; // 32KB chunks
-
-        self.dc.set_high().ok(); // Set data mode for image data
-        self.cs.set_low().ok(); // Select device for entire transfer
-
-        for chunk in buffer.chunks(chunk_size) {
-            self.send_data_raw(chunk);
-        }
-
-        self.cs.set_high().ok(); // Deselect device after all chunks
-
-    }
-
-    pub fn draw_color_entire_screen(&mut self, color: u16){
-        // draws color without using large buffer by tiling to save memory
-        // creates small 2Kb buffer to hold color value and sends it repeatedly
-        let color_buffer = [color as u8; 2 * 1024]; // 2KB buffer
-        self.set_size(0, 240, 0, 320);
-        self.begin_draw();
-
-        let data: &'static [u8] = unsafe { transmute(color_buffer.as_slice()) }; // because the transfer doesnt outlive this
-
-        self.dc.set_high().ok(); // Set data mode for image data
-        self.cs.set_low().ok(); // Select device for entire transfer
-
-        for _ in 0..((W * H * 2) / (2 * 1024) + 1) { // +1 to account for any remaining data
-            self.send_data_raw(data)
-        }
-
-        self.cs.set_high().ok(); // Deselect device after all chunks
-
     }
 
     pub fn off(&mut self) {
@@ -238,7 +164,11 @@ where
     }
 
     fn send_command(&mut self, cmd: Commands) {
-        self.cmd_buf[0] = cmd as u8;
+        let cmd_buf = self.cmd_buf.take().unwrap();
+        cmd_buf[0] = cmd as u8;
+
+        let st = self.st.take().unwrap();
+        let tx = self.tx.take().unwrap();
 
         // Set DC mode (CS is handled externally by macro)
         self.dc.set_low().ok(); // Command mode
@@ -249,13 +179,9 @@ where
             .fifo_enable(false)
             .transfer_complete_interrupt(false);
 
-        // Use unsafe transmute to avoid lifetime issues with DMA transfer
-        let dup_st: StreamX<DMA, S> = unsafe{mem::transmute_copy(&self.st)};
-        let dup_tx: Tx<SPI> = unsafe{mem::transmute_copy(&self.tx)};
-        let dup_cmd_buf: &'static mut [u8; 1] = unsafe{mem::transmute_copy(&self.cmd_buf)};
 
         let mut tf =
-            Transfer::init_memory_to_peripheral(dup_st, dup_tx, dup_cmd_buf, None, config);
+            Transfer::init_memory_to_peripheral(st, tx, cmd_buf, None, config);
         tf.start(|_| {});
         tf.wait();
 
@@ -273,15 +199,19 @@ where
         }
 
         let (st, tx, cmd_buf, _) = tf.release();
-        self.st = st;
-        self.tx = tx;
-        self.cmd_buf = cmd_buf;
+        self.st = Some(st);
+        self.tx = Some(tx);
+        self.cmd_buf = Some(cmd_buf);
 
         // CS stays low for external delay handling
     }
 
     fn send_data_u8(&mut self, data: u8){
-        self.data_buf[0] = data;
+        let data_buf = self.data_buf.take().unwrap();
+        data_buf[0] = data;
+
+        let st = self.st.take().unwrap();
+        let tx = self.tx.take().unwrap();
 
         // Set DC mode (CS is handled externally by macro)
         self.dc.set_high().ok(); // Data mode
@@ -292,12 +222,8 @@ where
             .fifo_enable(false)
             .transfer_complete_interrupt(false);
 
-        let dup_st: StreamX<DMA, S> = unsafe{mem::transmute_copy(&self.st)};
-        let dup_tx: Tx<SPI> = unsafe{mem::transmute_copy(&self.tx)};
-        let dup_data_buf: &'static mut [u8; 1] = unsafe{mem::transmute_copy(&self.data_buf)};
-
         let mut tf =
-            Transfer::init_memory_to_peripheral(dup_st, dup_tx, dup_data_buf, None, config);
+            Transfer::init_memory_to_peripheral(st, tx, data_buf, None, config);
         tf.start(|_| {});
         tf.wait();
 
@@ -315,9 +241,9 @@ where
         }
 
         let (st, tx, data_buf, _) = tf.release();
-        self.st = st;
-        self.tx = tx;
-        self.data_buf = data_buf;
+        self.st = Some(st);
+        self.tx = Some(tx);
+        self.data_buf = Some(data_buf);
 
         // CS stays low for external delay handling
     }
@@ -332,18 +258,18 @@ where
             .fifo_enable(false)
             .transfer_complete_interrupt(false);
 
-        let dup_st: StreamX<DMA, S> = unsafe{mem::transmute_copy(&self.st)};
-        let dup_tx: Tx<SPI> = unsafe{mem::transmute_copy(&self.tx)};
-        let dup_caset_buf: &'static mut [u8; 4] = unsafe{mem::transmute_copy(&self.caset_buf)};
+        let st = self.st.take().unwrap();
+        let tx = self.tx.take().unwrap();
+        let caset_buf = self.caset_buf.take().unwrap();
 
-        let mut tf = Transfer::init_memory_to_peripheral(dup_st, dup_tx, dup_caset_buf, None, config);
+        let mut tf = Transfer::init_memory_to_peripheral(st, tx, caset_buf, None, config);
         tf.start(|_| {});
         tf.wait();
         let (st, tx, caset_buf, _) = tf.release();
-        self.st = st;
-        self.tx = tx;
-        self.caset_buf = caset_buf;
-        
+        self.st = Some(st); // restoring the updated copy.
+        self.tx = Some(tx);
+        self.caset_buf = Some(caset_buf);
+
         self.d.delay_ms(delay_ms); // Data processing delay
     }
 
@@ -357,46 +283,47 @@ where
             .fifo_enable(false)
             .transfer_complete_interrupt(false);
 
-        let dup_st: StreamX<DMA, S> = unsafe{mem::transmute_copy(&self.st)};
-        let dup_tx: Tx<SPI> = unsafe{mem::transmute_copy(&self.tx)};
-        let dup_raset_buf: &'static mut [u8; 4] = unsafe{mem::transmute_copy(&self.raset_buf)};
+        let st = self.st.take().unwrap();
+        let tx = self.tx.take().unwrap();
+        let raset_buf = self.raset_buf.take().unwrap();
 
-        let mut tf = Transfer::init_memory_to_peripheral(dup_st, dup_tx, dup_raset_buf, None, config);
+        let mut tf = Transfer::init_memory_to_peripheral(st, tx, raset_buf, None, config);
         tf.start(|_| {});
         tf.wait();
         let (st, tx, raset_buf, _) = tf.release();
-        self.st = st;
-        self.tx = tx;
-        self.raset_buf = raset_buf;
-        
+        self.st = Some(st);
+        self.tx = Some(tx);
+        self.raset_buf = Some(raset_buf);
+
         self.d.delay_ms(delay_ms); // Data processing delay
     }
 
-    fn send_data_raw(&mut self, data: &'static [u8]){
-        // Raw data send without CS management - for use in chunked transfers
+    pub fn send_data_chunk(&mut self, chunk: &'static mut [u8; CHUNK_SIZE]) -> &'static mut [u8; CHUNK_SIZE] {
         let config = DmaConfig::default()
             .peripheral_increment(false)
             .memory_increment(true)
             .fifo_enable(false)
             .transfer_complete_interrupt(false);
 
-        let dup_st: StreamX<DMA, S> = unsafe{mem::transmute_copy(&self.st)};
-        let dup_tx: Tx<SPI> = unsafe{mem::transmute_copy(&self.tx)};
-        let dup_data: &'static mut [u8] = unsafe{mem::transmute_copy(&data)};
+        let st = self.st.take().unwrap();
+        let tx = self.tx.take().unwrap();
 
-        let mut tf = Transfer::init_memory_to_peripheral(dup_st, dup_tx, dup_data, None, config);
+        let mut tf = Transfer::init_memory_to_peripheral(st, tx, chunk, None, config);
         tf.start(|_| {});
         tf.wait();
-        let (st, tx, _, _) = tf.release();
-        self.st = st;
-        self.tx = tx;
+        let (st, tx, d, _) = tf.release();
+        self.st = Some(st);
+        self.tx = Some(tx);
+        d
     }
 
+    #[inline(always)]
     pub fn select(&mut self) -> &mut Self {
         self.cs.set_low().ok(); // Select the device
         self
     }
 
+    #[inline(always)]
     pub fn deselect(&mut self) -> &mut Self {
         self.cs.set_high().ok(); // Deselect the device
         self

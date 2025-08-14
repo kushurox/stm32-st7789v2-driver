@@ -9,11 +9,9 @@ use cortex_m_rt::entry;
 
 use defmt::info;
 use defmt_rtt as _;
-use embedded_graphics::framebuffer::{buffer_size, Framebuffer};
-use embedded_graphics::pixelcolor::raw::BigEndian;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::primitives::Rectangle;
 use panic_probe as _;
 use stm32f4xx_hal::dma::StreamsTuple;
 use stm32f4xx_hal::dwt::DwtExt;
@@ -23,7 +21,7 @@ use stm32f4xx_hal::prelude::*;
 use stm32f4xx_hal::spi::Spi;
 use stm32f4xx_hal::{self, rcc::RccExt};
 
-use crate::st7789v2::dma::st7789v2dma::ST7789V2DMA;
+use crate::st7789v2::dma::st7789v2dma::{CHUNK_SIZE, ST7789V2DMA};
 
 mod st7789v2;
 
@@ -106,17 +104,21 @@ fn main() -> ! {
     let data_buf = singleton!(: [u8; 1] = [0; 1]).unwrap();
     let caset_buf = singleton!(: [u8; 4] = [0; 4]).unwrap(); // Column address buffer
     let raset_buf = singleton!(: [u8; 4] = [0; 4]).unwrap(); // Row address buffer
-    
+    let chunk_buffer = singleton!(: [u8; CHUNK_SIZE] = [0; CHUNK_SIZE]).unwrap(); // Chunk buffer for DMA transfers
 
-    let mut dma_st: ST7789V2DMA<'_, _, _, _, _, _, 3, 3, W, H, OFFSET> = 
-        ST7789V2DMA::new(cs, dc, rst, tx, stream, &mut d, cmd_buf, data_buf, caset_buf, raset_buf);
+    let mut dma_st: ST7789V2DMA<'_, _, _, _, _, _, 3, 3, W, H, OFFSET> =
+        ST7789V2DMA::new(cs, dc, rst, tx, stream, &mut d, cmd_buf, data_buf, caset_buf, raset_buf, chunk_buffer);
     
     dma_st.init();
 
+    let r = Rectangle::new(dma_st.bounding_box().top_left, Size::new(W as u32, H as u32));
+
+    dma_st.fill_contiguous(&r, core::iter::repeat(Rgb565::BLUE)).ok();
 
 
-    // dma_st.d.delay_ms(3000);
-    // dma_st.off();
+
+    dma_st.d.delay_ms(3000);
+    dma_st.clear(Rgb565::WHITE).ok();
 
     loop {}
 }
